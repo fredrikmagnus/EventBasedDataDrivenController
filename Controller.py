@@ -76,7 +76,7 @@ class Controller:
         # self.Q = np.eye(self.n_inputs-1) # Cost on state deviation
         self.Q = Q
 
-        # Spike when z_u <= spike_threshold (z_u: output trace)
+        #Spike when z_u <= spike_threshold (z_u: output trace)
         self.spike_threshold = 1 # Induce initial spike
 
     def update(self, x_in:np.ndarray, a_ref:np.ndarray):
@@ -156,7 +156,7 @@ class Controller:
         a_opt = np.concatenate((a_opt, np.array([alpha_star])))
         return a_opt
     
-    def spike(self):
+    def spike(self, a_ref:np.ndarray):
         if self.z[-1] <= self.spike_threshold:
             # x_in = np.zeros(self.n_inputs)
             # x_in[-1] = 1.0
@@ -164,6 +164,14 @@ class Controller:
             return 1.
         else:
             return 0.
+        # dJ/dalpha = z(t)^T@P^T@Q@P@z(t) + z(t)^T@P^T@Q(P@x_u - a_ref) 
+        # x_u = np.zeros(self.n_inputs) # Control input vector
+        # x_u[-1] = 1.0 # Control input weight
+        # cost_derivative = self.z.T @ self.P.T @ self.Q @ self.P @ self.z + self.z.T @ self.P.T @ self.Q @ (self.P @ x_u - a_ref)
+        # if cost_derivative <= 0:
+        #     return 1.0
+        # else:
+        #     return 0.0
     
 
 

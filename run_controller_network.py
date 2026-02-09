@@ -32,11 +32,30 @@ SMD_params = {
     'stiffness': .4,
     'dt': dt,
 }
-smd = ss.SpringMassDamper(**SMD_params, x0=[-0.1, -0.1])
+# sys = ss.SpringMassDamper(**SMD_params, x0=[-0.1, -0.1])
+
+# Ts = 0.05        # Sampling time
+# R = 2.0           # Resistance
+# L = 0.5           # Inductance
+# Kb = 0.1          # Back-EMF constant
+# Km = 0.5          # Motor constant
+# Kf = 0.1         # Friction constant
+# J = 0.3          # Inertia
+motor_params = {
+    'R': 2.0,
+    'L': 0.5,
+    'Kb': 0.1,
+    'Km': 0.5,
+    'Kf': 0.1,
+    'J': 0.3,
+    'Ts': dt,
+}
+sys = ss.DC_motor(**motor_params, x0=[0.2, 0.0])
+
 encoder1 = ss.IFSpikeEncoder_absolute(threshold=0.05, dt=dt)
 # encoder2 = IFSpikeEncoder_absolute(threshold=0.05, dt=dt)
 encoder3 = ss.DifferentialEncoder(threshold=0.01, dt=dt)
-spike_encoder = ss.EncoderArray([encoder1])#, encoder2])
+spike_encoder = ss.EncoderArray([encoder1])#, encoder3])
 config = 'config.yaml'
 config = read_data_from_yaml(config, Config)
 
@@ -64,7 +83,7 @@ for i, t in enumerate(time):
     u_current = np.zeros((N, 1))
     u[i] = (u_prev.T @ ext_out.T).flatten()[0] * config.spiking_network.controller.spike_force
     # Step the plant
-    y[i] = smd.step(u[i])
+    y[i] = sys.step(u[i])
     spike_plant = spike_encoder.step([y[i] for _ in range(len(spike_encoder.encoders))])
     spikes_plant[:, i] = spike_plant
 
@@ -91,7 +110,7 @@ for i, t in enumerate(time):
         a_ref[0] = a_ref_val  # Reference applied to first input (plant)
 
         controller.update(x_in, a_ref)
-        spike_controller = controller.spike()
+        spike_controller = controller.spike(a_ref)
         spikes_network[j, i] = spike_controller
         u_current[j, 0] = spike_controller
 

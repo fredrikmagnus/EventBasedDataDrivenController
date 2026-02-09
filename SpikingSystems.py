@@ -37,6 +37,80 @@ class SpringMassDamper:
         self.state = self.A @ self.state + self.B.flatten() * u
         self.y = self.C @ self.state
         return self.y[0]
+    
+
+class DC_motor:
+    """
+    DC motor (angular velocity output, voltage input) 
+
+    State  x = [current; angular velocity]
+    Input  u = voltage
+    Output y = angular velocity
+
+    Parameters
+    ----------
+    R : float
+        Resistance.
+    L : float
+        Inductance.
+    Kb : float
+        Back-EMF constant.
+    Km : float
+        Motor constant.
+    Kf : float
+        Friction constant.
+    J : float
+        Inertia.
+    Ts : float
+        Sampling time interval.
+    """
+    def __init__(self, R=2.0, L=0.5, Kb=0.1, Km=0.1, Kf=0.02, J=0.02, Ts=0.01, x0=np.zeros((2,1))):
+        self.R, self.L, self.Kb, self.Km, self.Kf, self.J, self.Ts = R, L, Kb, Km, Kf, J, Ts
+
+        # 1. continuous-time matrices
+        A_c = np.array([[-R/L,    -Kb/L],
+                        [Km/J,  -Kf/J]])
+        B_c = np.array([[1/L],
+                        [0]])
+        C   = np.array([[0, 1]])
+
+        # 2. exact discretisation  (using matrix exponential)
+        M = np.block([[A_c, B_c],
+                      [np.zeros((1,3))]])      # augment for integral
+        M_d = expm(M*Ts)                       # expm([[A, B],[0,0]])
+
+        self.A = M_d[:2, :2]                   # e^{A_c Ts}
+        self.B = M_d[:2,  2:3]                 # integral_0^{Ts} e^{A tau} B dtau
+        self.C = C
+
+        # # Euler discretisation
+        # self.A = np.eye(2) + A_c * Ts
+        # self.B = B_c * Ts
+        # self.C = C
+
+        self.x = np.asarray(x0, dtype=float).reshape(2, 1)
+        self.y = self.C @ self.x  # initial output
+ 
+
+    # 2. one simulation step -------------------------------------------------
+    def step(self, u, input_noise_STD=0, process_noise_STD=0, measurement_noise_STD=0):
+        """
+        Parameters
+        ----------
+        u : ndarray shape (1,1)
+            Voltage applied during the current interval [kTs,(k+1)Ts).
+
+        Returns
+        -------
+        y : ndarray shape (1,1)
+            Output after the state update (y_{k+1}).
+        """
+        u = u.reshape((1,1)) + np.random.normal(0, input_noise_STD, (1,1))
+        # process_noise = 0.0 if not process_noise else 1.0
+        # measurement_noise = 0.0 if not measurement_noise else 1.0
+        self.x = self.A @ self.x + self.B @ u + np.random.normal(0, process_noise_STD, (2,1))
+        self.y = self.C @ self.x + np.random.normal(0, measurement_noise_STD, (1,1))
+        return self.y
 
 
 class IFSpikeEncoder_absolute:
