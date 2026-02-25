@@ -97,7 +97,7 @@ for i, t in enumerate(time[:-1]):
 
     
     controller.update(x_in, a_ref)
-    spike = controller.spike()
+    spike = controller.spike(a_ref)
 
     u[i + 1] = spike
     controller_spikes[:, i] = np.array([spike])

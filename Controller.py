@@ -1,41 +1,41 @@
 import numpy as np
 
 class Predictor:
-    def __init__(self, n_inputs, gamma_weights, tau_decay, lambda_ridge, dt, estimate_mean=False):
+    def __init__(self, n_inputs, gamma_weights, tau_decay, lambda_ridge, dt, affine=False):
         self.n_inputs = n_inputs
+        self.n_outputs = n_inputs
         self.gamma_weights = gamma_weights
         self.tau_decay = tau_decay
         self.lambda_ridge = lambda_ridge
         self.dt = dt
         self.decay = np.exp(-dt/self.tau_decay) # Per time-step trace decay
+        self.affine = affine
 
-        self.x = np.zeros(n_inputs) # Trace vector
-        self.mean = np.zeros(n_inputs) # Event-based mean
-        self.z = np.zeros(n_inputs) # Centered traces
+        self.z = np.zeros(self.n_inputs) # Trace vector
 
-        self.Sigma = self.lambda_ridge * np.eye(n_inputs)
-        self.Psi = np.zeros((n_inputs, n_inputs))
-        self.P = self.lambda_ridge * np.eye(n_inputs) # Prediction weights
+        if self.affine:
+            self.n_inputs += 1 # Add bias input
+            self.z = np.hstack((self.z, np.array([0.0]))) # Bias input
+
+        self.Sigma = self.lambda_ridge * np.eye(self.n_inputs)
+        self.Psi = np.zeros((self.n_outputs, self.n_inputs))
+        self.P = np.zeros((self.n_outputs, self.n_inputs)) # Prediction weights
         
-
-        self.estimate_mean = estimate_mean
 
     def update(self, x_in:np.ndarray):
         # 1) Decay traces:
-        self.x *= self.decay
-
-        # 2) Update mean based on pre-spike traces
-        if self.estimate_mean and x_in.sum() > 0:
-            self.mean = self.gamma_weights*self.mean + (1-self.gamma_weights)*self.x
+        self.z *= self.decay
 
         # 3) Update traces with incoming spikes
-        z_pre = self.x - self.mean
+        z_pre = self.z.copy() 
         z_post = z_pre + x_in #* (1-self.decay)/self.dt
 
-        self.x += x_in #* (1-self.decay)/self.dt
+        
 
         # 4) Update covariance estimates and prediction weights when there is an input spike
         if x_in.sum() > 0:
+            if self.affine:
+                z_post[-1] = 1.0 # Bias input is always active
             # x_k z_{k}^T = alpha_k x_{k+1} z_{k}^-T
             self.Psi = self.gamma_weights*self.Psi + (1-self.gamma_weights)*np.outer(x_in, z_pre)
             # self.CrossCov = self.gamma_weights*self.CrossCov + (1-self.gamma_weights)*np.outer(z_post, z_pre)
@@ -45,7 +45,15 @@ class Predictor:
             # self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post) - np.outer(z_post, z_pre) + self.lambda_ridge*np.eye(self.n_inputs))
 
             # Per-channel next-spike prediction:
-            self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post) - np.outer(z_post, (1-x_in)*z_pre) + self.lambda_ridge*np.eye(self.n_inputs))
+            # self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post) - np.outer(z_post, (1-x_in)*z_pre) + self.lambda_ridge*np.eye(self.n_inputs))
+            if self.affine:
+                x_in_expanded = np.zeros(self.n_inputs)
+                x_in_expanded[:len(x_in)] = x_in
+                x_in_expanded[-1] = 1.0 # Bias input is always active
+            else:
+                x_in_expanded = x_in
+
+            self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post) - np.outer(z_post, (1-x_in_expanded)*z_pre) + self.lambda_ridge*np.eye(self.n_inputs))
             
             self.P = self.Psi @ np.linalg.inv(self.Sigma)
 

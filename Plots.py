@@ -73,7 +73,13 @@ def compare_time_predictions(time, x, predictions, tau):
     for i, spike_time in enumerate(spike_times):
         spike_index = np.where(time == spike_time)[0][0]
         p = np.clip(predictions[:, spike_index], 1e-12, 1.0)
+        
+        # Get indices of predictions that are above 1 or below 0
+        error_indices = np.where((predictions[:, spike_index] < 0) | (predictions[:, spike_index] > 1))[0]
+        
         delta_t_pred = -tau*np.log(p)
+        # Set components that are above 1 or below 0 to -spike_time
+        delta_t_pred[error_indices] = -spike_time
         
         next_spike_times_pred[:, i] = spike_time + delta_t_pred
 
@@ -147,8 +153,9 @@ def plot_covariances(time, Covs, CrossCovs):
     plt.show()
 
     # Plot all values of K_causal over time
+    n_outputs = CrossCovs.shape[0]
     plt.figure(figsize=(12, 8))
-    for i in range(n_inputs):
+    for i in range(n_outputs):
         for j in range(n_inputs):
             plt.step(time, CrossCovs[i, j, :], label=f'[{i}, {j}]')
     plt.xlabel('Time')
@@ -173,9 +180,10 @@ def plot_traces(time, traces):
 
 def plot_gains(time, PredictionGains):
     n_inputs = PredictionGains.shape[0]
+    n_outputs = PredictionGains.shape[1]
     plt.figure(figsize=(12, 8))
     for i in range(n_inputs):
-        for j in range(n_inputs):
+        for j in range(n_outputs):
             plt.step(time, PredictionGains[i, j, :], label=f'[{i}, {j}]')
     plt.xlabel('Time')
     plt.ylabel('Prediction Gain Values')
