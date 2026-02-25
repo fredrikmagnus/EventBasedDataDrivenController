@@ -28,7 +28,8 @@ class Predictor:
 
         # 3) Update traces with incoming spikes
         z_pre = self.z.copy() 
-        z_post = z_pre + x_in #* (1-self.decay)/self.dt
+        z_post = z_pre.copy() #+ x_in #* (1-self.decay)/self.dt
+        z_post[:len(x_in)] += x_in
 
         
 
@@ -53,6 +54,11 @@ class Predictor:
             else:
                 x_in_expanded = x_in
 
+            # NOTE: Something is wrong in this implementation. 
+            # Affine structure does not work with multiple input channels. 
+            # Gains blow up. I suspect that the bias term should only interact with the spiking channel. 
+            # I assume that the bias interacting with all channels each time any spike occurs causes causes a runaway effect. 
+            # The reason and correct form will likely show itself when deriving the method explicitly. 
             self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post) - np.outer(z_post, (1-x_in_expanded)*z_pre) + self.lambda_ridge*np.eye(self.n_inputs))
             
             self.P = self.Psi @ np.linalg.inv(self.Sigma)
