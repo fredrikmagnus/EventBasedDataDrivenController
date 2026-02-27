@@ -12,14 +12,53 @@ class Predictor:
         self.affine = affine
 
         self.z = np.zeros(self.n_inputs) # Trace vector
-
+        
         if self.affine:
             self.n_inputs += 1 # Add bias input
             self.z = np.hstack((self.z, np.array([0.0]))) # Bias input
 
         self.Sigma = self.lambda_ridge * np.eye(self.n_inputs)
         self.Psi = np.zeros((self.n_outputs, self.n_inputs))
-        self.P = np.zeros((self.n_outputs, self.n_inputs)) # Prediction weights
+        self.W = np.zeros((self.n_outputs, self.n_inputs)) # Prediction weights
+
+        self.eta = 0.1 # Learning rate for gradient update
+
+    def gradient_update(self, x_in:np.ndarray):
+        # 1) Decay traces:
+        self.z *= self.decay
+
+        # 3) Update traces with incoming spikes
+        z_pre = self.z.copy() 
+        z_post = z_pre.copy() #+ x_in #* (1-self.decay)/self.dt
+        z_post[:len(x_in)] += x_in
+
+        
+
+        # 4) Update covariance estimates and prediction weights when there is an input spike
+        if x_in.sum() > 0:
+            # D_x = np.diag(x_in)
+            D_bar_x = np.diag((1-x_in))
+            if self.affine:
+                z_post[-1] = 1.0 # Bias input is always active
+            grad_W = self.W @ np.outer(z_post, z_post) - np.outer(x_in, z_pre) - D_bar_x @ self.W @ np.outer(z_post, z_pre) 
+            # # A = np.outer(z_post, z_post) 
+            # # B = np.outer(x_in, z_pre)
+            # # C = np.outer(z_post, z_pre)
+            # # grad_W = D_x @ (self.W @ A - B) @ A + D_bar_x @ self.W @ (A - C) @ (A - C).T
+            
+            self.W -= self.eta * grad_W
+
+            # Standard global next-spike predictor, affine model:
+            # self.Psi = self.gamma_weights*self.Psi + (1-self.gamma_weights)*np.outer(x_in, z_pre)
+            # # Gradient = W @ Sigma_{k-1} - Psi_{k} + lambda_ridge * W
+            # grad_W = self.W @ self.Sigma - self.Psi + self.lambda_ridge * self.W
+            # self.W -= self.eta * grad_W
+            # self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*np.outer(z_post, z_post)
+            # SGD update:
+            # grad_W = self.W @ np.outer(z_post, z_post) - np.outer(x_in, z_pre) + self.lambda_ridge * self.W
+            # self.W -= self.eta * grad_W
+
+        self.z = z_post
         
 
     def update(self, x_in:np.ndarray):
@@ -59,14 +98,21 @@ class Predictor:
             # Gains blow up. I suspect that the bias term should only interact with the spiking channel. 
             # I assume that the bias interacting with all channels each time any spike occurs causes causes a runaway effect. 
             # The reason and correct form will likely show itself when deriving the method explicitly. 
-            self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post) - np.outer(z_post, (1-x_in_expanded)*z_pre) + self.lambda_ridge*np.eye(self.n_inputs))
-            
-            self.P = self.Psi @ np.linalg.inv(self.Sigma)
+            # print(np.outer(z_post, (1-x_in_expanded)*z_pre))
+            D_bar_x = np.diag((1-x_in_expanded))
+            D_x = np.diag(x_in_expanded)
+            # print(np.outer(z_post, z_pre)@D_bar_x)
+            # self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post) - np.outer(z_post, z_pre)@D_bar_x + self.lambda_ridge*np.eye(self.n_inputs))
+            # self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post)@D_x + self.lambda_ridge*np.eye(self.n_inputs))
+            self.Sigma = self.gamma_weights*self.Sigma + (1-self.gamma_weights)*(np.outer(z_post, z_post) + self.lambda_ridge*np.eye(self.n_inputs))
+            self.W = self.Psi @ np.linalg.inv(self.Sigma)
+            # self.W = self.Psi @ np.linalg.pinv(self.Sigma)
+            # self.W = np.linalg.solve(self.Sigma, self.Psi.T).T
 
         self.z = z_post
 
     def predict(self):
-        return self.P @ self.z
+        return self.W @ self.z
     
 
 class Controller:
