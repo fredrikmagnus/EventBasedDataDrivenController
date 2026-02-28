@@ -2,31 +2,31 @@ import importlib
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
-from Controller import Predictor, spike_signal
+from Controller_spiking import Predictor, spike_signal
 from SpikingSystems import IFSpikeEncoder_absolute
 import Plots
-importlib.reload(sys.modules['Controller'])
+importlib.reload(sys.modules['Controller_spiking'])
 importlib.reload(sys.modules['Plots'])
-from Controller import Predictor, spike_signal
+from Controller_spiking import Predictor, spike_signal
 import Plots
 
-T = 100
-dt = 0.01
+T = 500
+dt = 0.001
 time = np.arange(0, T, dt)
 N = len(time)
 
-periods = [0.5] # Spike periods for each input channel
-phases = [0.05] # Phase offsets for each input channel
+periods = [0.5, 0.5] # Spike periods for each input channel
+phases = [0.05, 0.1] # Phase offsets for each input channel
 n_inputs = len(periods)
 randomize = [0.0 for _ in range(n_inputs)] # Randomize spike times by adding uniform noise in [-randomize, randomize]
 
 # print(np.exp(-0.05/0.2))
-
+# NOTE: Make it spike at correct time and not next timestep. 
 x = np.zeros((n_inputs, N), dtype=int)
 for i in range(n_inputs):
     x[i, :] = spike_signal(time, periods[i], phases[i], randomize=randomize[i])
 # x[0, len(time)//2:] = 0 # Remove second half of spikes from first input channel to test prediction of missing spikes
-# x[0, :] += spike_signal(time, periods[0], phases[0]+0.08, randomize=randomize[0]) # Add second spike train to first input channel
+x[0, :] += spike_signal(time, periods[0], phases[0]+0.08, randomize=randomize[0]) # Add second spike train to first input channel
 
 
 
@@ -44,11 +44,14 @@ predictor = Predictor(
     lambda_ridge=1e-4,   # Ridge regularization parameter
     dt=dt,               # Time step size
     affine=True,   # Include affine term in predictor
+    spiking=False
 )
 
 n_outputs = predictor.n_outputs
 n_inputs = predictor.n_inputs
 
+if predictor.spiking:
+    x = np.vstack((np.zeros((1, N), dtype=int), x)) # Add row for feedback from previous output spike
 
 # Logs:
 predictions = np.zeros((n_outputs, N))
@@ -59,8 +62,13 @@ PredictionGains = np.zeros((n_outputs, n_inputs, N))
 
 for k in range(1, N):
     # predictor.update(x[:, k])
-    predictor.gradient_update(x[:, k])
-    predictions[:, k] = predictor.predict() #+ predictor.x
+    if predictor.spiking:
+        x_in = x[1:,k] # x[0, :] is used to store output spikes  
+    else:
+        x_in = x[:, k]
+    predictions[:, k], x[0, k] = predictor.gradient_update(x_in)
+    # predictions[:, k] = predictor.predict() #+ predictor.x
+    #  predictor.spike()
     
     traces[:, k] = predictor.z
     Covs[:, :, k] = predictor.Sigma

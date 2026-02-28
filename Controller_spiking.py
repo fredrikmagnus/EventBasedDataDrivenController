@@ -1,7 +1,7 @@
 import numpy as np
 
 class Predictor:
-    def __init__(self, n_inputs, gamma_weights, tau_decay, lambda_ridge, dt, affine=False):
+    def __init__(self, n_inputs, gamma_weights, tau_decay, lambda_ridge, dt, affine=False, spiking=False):
         self.n_inputs = n_inputs
         self.n_outputs = n_inputs
         self.gamma_weights = gamma_weights
@@ -10,29 +10,48 @@ class Predictor:
         self.dt = dt
         self.decay = np.exp(-dt/self.tau_decay) # Per time-step trace decay
         self.affine = affine
+        self.spiking = spiking
 
         self.z = np.zeros(self.n_inputs) # Trace vector
         
         if self.affine:
             self.n_inputs += 1 # Add bias input
-            self.z = np.hstack((self.z, np.array([0.0]))) # Bias input
+            self.z = np.hstack((self.z, np.array([1.0]))) # Bias input
+        if self.spiking:
+            # NOTE: Own output is fed back as input for next time step.
+            # The trace for this feedback input is stored at index 0.
+            self.n_inputs += 1 # Add feedback from previous output
+            self.z = np.hstack((np.array([0.0]), self.z)) # Feedback input
+            self.n_outputs += 1 # Add output channel for predicting next output spike
 
         self.Sigma = self.lambda_ridge * np.eye(self.n_inputs)
         self.Psi = np.zeros((self.n_outputs, self.n_inputs))
-        self.W = np.zeros((self.n_outputs, self.n_inputs)) # Prediction weights
-
+        # self.W = np.zeros((self.n_outputs, self.n_inputs)) # Prediction weights
+        self.W = 0.1*np.random.rand(self.n_outputs, self.n_inputs) # Random initial prediction weights
         self.eta = 0.1 # Learning rate for gradient update
+
+        self.spiked = True # Whether the predictor has spiked at the previous time step
+        self.spike_threshold = .5 # Initial spike threshold
+
 
     def gradient_update(self, x_in:np.ndarray):
         # 1) Decay traces:
         self.z *= self.decay
 
+        if self.spiking:
+            if self.z[-1] <= self.spike_threshold:
+                self.z[-1] = self.spike_threshold 
+                x_in = np.hstack((np.array([1.0]), x_in)) # Add feedback from previous output spike
+            else:
+                x_in = np.hstack((np.array([0.0]), x_in)) # Add feedback from previous output spike
+
         # 3) Update traces with incoming spikes
         z_pre = self.z.copy() 
         z_post = z_pre.copy() #+ x_in #* (1-self.decay)/self.dt
+        
         z_post[:len(x_in)] += x_in
 
-        
+        pred = self.W @ z_post
 
         # 4) Update covariance estimates and prediction weights when there is an input spike
         if x_in.sum() > 0:
@@ -40,8 +59,17 @@ class Predictor:
             D_bar_x = np.diag((1-x_in))
             if self.affine:
                 z_post[-1] = 1.0 # Bias input is always active
-            grad_W = self.W @ np.outer(z_post, z_post) - np.outer(x_in, z_pre) - D_bar_x @ self.W @ np.outer(z_post, z_pre) + self.lambda_ridge * self.W
-            self.W -= self.eta * grad_W
+            # grad_W = self.W @ np.outer(z_post, z_post) - np.outer(x_in, z_pre) - D_bar_x @ self.W @ np.outer(z_post, z_pre) + self.lambda_ridge * self.W
+            grad_W_prev = self.W @ np.outer(z_post, z_post) + self.lambda_ridge * self.W
+            grad_W_current = - np.outer(x_in, z_pre) - D_bar_x @ self.W @ np.outer(z_post, z_pre)
+            
+            # self.W -= self.eta * grad_W
+            pred = self.W @ z_post
+            self.W -= self.eta * grad_W_prev
+            self.W -= self.eta * grad_W_current
+            
+            
+            
 
             # Standard global next-spike predictor, affine model:
             # self.Psi = self.gamma_weights*self.Psi + (1-self.gamma_weights)*np.outer(x_in, z_pre)
@@ -53,10 +81,19 @@ class Predictor:
             # grad_W = self.W @ np.outer(z_post, z_post) - np.outer(x_in, z_pre) + self.lambda_ridge * self.W
             # self.W -= self.eta * grad_W
 
+            # Predict when to spike next:
+            if self.spiking:
+                self.spike_threshold = self.W[0, :] @ z_post
+            # print("Trace values:", z_post)
+            # print("Spike threshold:", self.spike_threshold)
+            # print("Bias trace value:", self.z[-1])
+            # print("Spike prediction:", -np.log(self.W[0, :] @ z_post)*self.tau_decay)
+
         self.z = z_post
-        
+        return pred, x_in[0] # Return spike
 
     def update(self, x_in:np.ndarray):
+        # NOTE: Only for non-spiking
         # 1) Decay traces:
         self.z *= self.decay
 
