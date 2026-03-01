@@ -104,6 +104,84 @@ def compare_time_predictions(time, x, predictions, tau):
     plt.show()
 
 
+def compare_event_time_predictions(event_times, x_event_times, predictions, tau, title='True and Predicted Next Spike Times', figsize=(12, 6), ax=None, show=True):
+    """Compare true spike event-times with predicted next spike times (event-based).
+
+    Parameters:
+    - event_times: 1D array-like of global event times t_k (length N)
+    - x_event_times: list/sequence of length n_inputs, each element is an array-like of true spike times for that channel
+    - predictions: 2D array of shape (n_inputs, N) with model predictions a_hat(t_k) at each global event time
+    - tau: synaptic trace time constant used in the prediction model
+    - title: plot title
+    - figsize: figure size used when ax is None
+    - ax: optional matplotlib Axes to draw into
+    - show: whether to call plt.show()
+
+    Returns:
+    - fig, ax, next_spike_times_pred
+    """
+    event_times = np.asarray(event_times)
+    predictions = np.asarray(predictions)
+    n_inputs = len(x_event_times)
+    if predictions.ndim != 2:
+        raise ValueError(f"predictions must be 2D, got shape {predictions.shape}")
+    if predictions.shape[0] != n_inputs:
+        raise ValueError(
+            f"predictions first dimension must match len(x_event_times)={n_inputs}, got {predictions.shape[0]}"
+        )
+    if predictions.shape[1] != event_times.shape[0]:
+        raise ValueError(
+            f"predictions second dimension must match len(event_times)={event_times.shape[0]}, got {predictions.shape[1]}"
+        )
+
+    next_spike_times_pred = np.zeros((n_inputs, event_times.shape[0]))
+    for k, spike_time in enumerate(event_times):
+        p = np.clip(predictions[:, k], 1e-12, 1.0)
+        error_indices = np.where((predictions[:, k] < 0) | (predictions[:, k] > 1))[0]
+
+        delta_t_pred = -tau * np.log(p)
+        # Match compare_time_predictions behavior: invalid predictions plot at time 0
+        delta_t_pred[error_indices] = -spike_time
+        next_spike_times_pred[:, k] = spike_time + delta_t_pred
+
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+    else:
+        fig = ax.figure
+
+    for i in range(n_inputs):
+        true_color = colors[i % len(colors)]
+        pred_color = colors[(i + 1) % len(colors)]
+
+        ax.eventplot(
+            x_event_times[i],
+            lineoffsets=i * 2,
+            colors=true_color,
+            label=f'True x{i+1}',
+            linewidths=2,
+        )
+        ax.eventplot(
+            next_spike_times_pred[i, :],
+            lineoffsets=i * 2,
+            colors=pred_color,
+            linestyles='dashed',
+            label=f'Predicted x{i+1}',
+            linewidths=2,
+        )
+
+    ax.set_yticks(np.arange(0, n_inputs * 2, 2))
+    ax.set_yticklabels([f'x{i+1}' for i in range(n_inputs)])
+    ax.set_xlabel('Time')
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    if show:
+        plt.show()
+    return fig, ax, next_spike_times_pred
+
+
 def compare_predictions(time, x, predictions):
     n_inputs = x.shape[0]
     
@@ -191,6 +269,103 @@ def plot_gains(time, PredictionGains):
     plt.legend()
     plt.grid()
     plt.show()
+
+
+def plot_gains_event_based(event_times, prediction_gains, title=None, figsize=(12, 8), ax=None, show=True):
+    """Event-based equivalent of plot_gains.
+
+    Parameters:
+    - event_times: 1D array-like of global event times t_k (length N)
+    - prediction_gains: 3D array of shape (n_outputs, n_inputs, N) or (n_inputs, n_outputs, N)
+    - title: optional custom title
+    - figsize: figure size used when ax is None
+    - ax: optional matplotlib Axes to draw into
+    - show: whether to call plt.show()
+
+    Returns:
+    - fig, ax
+    """
+    event_times = np.asarray(event_times)
+    prediction_gains = np.asarray(prediction_gains)
+    if prediction_gains.ndim != 3:
+        raise ValueError(f"prediction_gains must be 3D, got shape {prediction_gains.shape}")
+    if prediction_gains.shape[2] != event_times.shape[0]:
+        raise ValueError(
+            f"prediction_gains third dimension must match len(event_times)={event_times.shape[0]}, got {prediction_gains.shape[2]}"
+        )
+
+    if title is None:
+        title = r'Gain Matrix $\text{Cov}(x_k, z_k^-)\text{Cov}(z_k^+, z_k^+)^{-1}$ Elements Over Event Times'
+
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+    else:
+        fig = ax.figure
+
+    dim0, dim1, _ = prediction_gains.shape
+    for i in range(dim0):
+        for j in range(dim1):
+            ax.step(event_times, prediction_gains[i, j, :], label=f'[{i}, {j}]')
+
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Prediction Gain Values')
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    if show:
+        plt.show()
+    return fig, ax
+
+
+def plot_raw_predictions_event_based(event_times, predictions, title='Raw Predictions (Event-Based)', figsize=(12, 6), ax=None, show=True, ylabel='Prediction'):
+    """Plot raw model predictions over event times.
+
+    Parameters:
+    - event_times: 1D array-like of global event times t_k (length N)
+    - predictions: 2D array of shape (n_outputs, N)
+    - title: plot title
+    - figsize: figure size used when ax is None
+    - ax: optional matplotlib Axes to draw into
+    - show: whether to call plt.show()
+    - ylabel: y-axis label
+
+    Returns:
+    - fig, ax
+    """
+    event_times = np.asarray(event_times)
+    predictions = np.asarray(predictions)
+    if predictions.ndim != 2:
+        raise ValueError(f"predictions must be 2D, got shape {predictions.shape}")
+    if predictions.shape[1] != event_times.shape[0]:
+        raise ValueError(
+            f"predictions second dimension must match len(event_times)={event_times.shape[0]}, got {predictions.shape[1]}"
+        )
+
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+    else:
+        fig = ax.figure
+
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    for i in range(predictions.shape[0]):
+        ax.plot(
+            event_times,
+            predictions[i, :],
+            label=f'$\\hat{{x}}_{{{i+1}}}$',
+            linewidth=2,
+            color=colors[i % len(colors)],
+        )
+
+    ax.set_xlabel('Time')
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    if show:
+        plt.show()
+    return fig, ax
 
 def compare_with_reference2(time, x, ref):
     """

@@ -30,7 +30,6 @@ class Predictor:
         self.W = 0.1*np.random.rand(self.n_outputs, self.n_inputs) # Random initial prediction weights
         self.eta = 0.1 # Learning rate for gradient update
 
-        self.spiked = True # Whether the predictor has spiked at the previous time step
         self.spike_threshold = .5 # Initial spike threshold
 
 

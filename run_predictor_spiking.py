@@ -1,4 +1,5 @@
 import importlib
+import time
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,8 +13,8 @@ import Plots
 
 T = 500
 dt = 0.001
-time = np.arange(0, T, dt)
-N = len(time)
+time_arr = np.arange(0, T, dt)
+N = len(time_arr)
 
 periods = [0.5, 0.5] # Spike periods for each input channel
 phases = [0.05, 0.1] # Phase offsets for each input channel
@@ -24,9 +25,9 @@ randomize = [0.0 for _ in range(n_inputs)] # Randomize spike times by adding uni
 # NOTE: Make it spike at correct time and not next timestep. 
 x = np.zeros((n_inputs, N), dtype=int)
 for i in range(n_inputs):
-    x[i, :] = spike_signal(time, periods[i], phases[i], randomize=randomize[i])
+    x[i, :] = spike_signal(time_arr, periods[i], phases[i], randomize=randomize[i])
 # x[0, len(time)//2:] = 0 # Remove second half of spikes from first input channel to test prediction of missing spikes
-x[0, :] += spike_signal(time, periods[0], phases[0]+0.08, randomize=randomize[0]) # Add second spike train to first input channel
+# x[0, :] += spike_signal(time_arr, periods[0], phases[0]+0.08, randomize=randomize[0]) # Add second spike train to first input channel
 
 
 
@@ -44,7 +45,7 @@ predictor = Predictor(
     lambda_ridge=1e-4,   # Ridge regularization parameter
     dt=dt,               # Time step size
     affine=True,   # Include affine term in predictor
-    spiking=False
+    spiking=True
 )
 
 n_outputs = predictor.n_outputs
@@ -60,6 +61,7 @@ Covs = np.zeros((n_inputs, n_inputs, N))
 CrossCovs = np.zeros((n_outputs, n_inputs, N))
 PredictionGains = np.zeros((n_outputs, n_inputs, N))
 
+start_time = time.time()
 for k in range(1, N):
     # predictor.update(x[:, k])
     if predictor.spiking:
@@ -74,7 +76,8 @@ for k in range(1, N):
     Covs[:, :, k] = predictor.Sigma
     CrossCovs[:, :, k] = predictor.Psi
     PredictionGains[:, :, k] = predictor.W
-
+end_time = time.time()
+print(f"Runtime: {end_time - start_time:.4f} seconds")
 # print(predictor.z.shape, predictor.P.shape)
 # print(predictions.shape)
 # print(predictor.P)
@@ -83,8 +86,8 @@ print("Psi:", predictor.Psi)
 print("Sigma:", predictor.Sigma)
 
 print(x.shape, predictions.shape)
-Plots.compare_time_predictions(time, x, predictions, predictor.tau_decay)
-Plots.compare_predictions(time, x, predictions)
+Plots.compare_time_predictions(time_arr, x, predictions, predictor.tau_decay)
+# Plots.compare_predictions(time_arr, x, predictions)
 # Plots.plot_traces(time, traces)
 # Plots.plot_covariances(time, Covs, CrossCovs)
-Plots.plot_gains(time, PredictionGains)
+Plots.plot_gains(time_arr, PredictionGains)
