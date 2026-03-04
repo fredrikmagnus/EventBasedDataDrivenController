@@ -5,13 +5,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PredictorEventBased import Predictor, spike_signal
 from SpikingSystems import IFSpikeEncoder_absolute
-from Plots import compare_event_time_predictions, plot_gains_event_based, plot_raw_predictions_event_based
+from Plots import compare_event_time_predictions, plot_gains_event_based, plot_raw_predictions_event_based, plot_prediction_error_event_based
 importlib.reload(sys.modules['PredictorEventBased'])
 from PredictorEventBased import Predictor, spike_signal
 
-T = 100
-periods = [0.5] # Spike periods for each input channel
-phases = [0.0] # Phase offsets for each input channel
+T = 35
+periods = [0.5, 0.5] # Spike periods for each input channel
+phases = [0.0, 0.2] # Phase offsets for each input channel
 n_inputs = len(periods)
 
 # Generate event-times for each input channel
@@ -32,11 +32,13 @@ print("Total number of events:", N)
 predictor = Predictor(
     n_inputs=n_inputs,   # Number of input channels
     gamma_weights=0.99,   # Decay factor for covariance estimates
-    tau_decay=0.2,      # Time constant for trace decay
+    tau_decay=0.5,      # Time constant for trace decay
     lambda_ridge=1e-6,   # Ridge regularization parameter
-    eta=0.3,            # Learning rate for gradient update
+    eta=0.1,            # Learning rate for gradient update
+    cumulative_channels=[], # Always accumulate covariance for first input channel
+    reference_tracking_costs=[0., 0.0], # Cost for tracking reference in each output channel (0 means no reference tracking)
     affine=True,   # Include affine term in predictor
-    spiking=True
+    spiking=False
 )
 
 n_outputs = predictor.n_outputs
@@ -63,14 +65,16 @@ if next_spike_time < all_spike_times[0]:
 start_time = time.time()
 for k, t in enumerate(all_spike_times):
     # Get input vector for this event
-    print(t)
+    # print(t)
     x_in = np.array([1.0 if t in channel else 0.0 for channel in x])
     if predictor.spiking:
         x_in = x_in[1:] 
+        # print("Input vector:", x_in)
     Covs.append(predictor.Sigma.copy())
     CrossCovs.append(predictor.Psi.copy())
     PredictionGains.append(predictor.W.copy())
-    pred, spike_out = predictor.gradient_update(t, x_in)
+    reference = np.zeros(predictor.n_outputs) # No reference tracking in this example
+    pred, spike_out = predictor.gradient_update(t, x_in, reference=reference)
     predictions.append(pred)
     traces.append(predictor.z[:n_inputs])
     if predictor.spiking and spike_out > 0:
@@ -96,6 +100,11 @@ print(PredictionGains.shape)
 # Element i: a_hat_i = exp(- (t_k+1 - t_k) / tau_decay) 
 # We reconstruct the predicted time until next spike as:
 # delta_t = - tau_decay * log(a_hat_i)
+all_spike_times = np.array(all_spike_times)
+print(predictions.shape)
+print(all_spike_times.shape)
+print([len(xi) for xi in x])
+
 compare_event_time_predictions(
     event_times=all_spike_times,
     x_event_times=x,
@@ -112,6 +121,14 @@ plot_gains_event_based(
 plot_raw_predictions_event_based(
     event_times=all_spike_times,
     predictions=predictions,
+)
+
+# Plot one-step-ahead prediction error:
+plot_prediction_error_event_based(
+    event_times=all_spike_times,
+    x_event_times=x,
+    predictions=predictions,
+    tau=predictor.tau_decay,
 )
 
 

@@ -1,7 +1,7 @@
 import numpy as np
 
 class Predictor:
-    def __init__(self, n_inputs, gamma_weights, tau_decay, lambda_ridge, eta, affine=False, spiking=False):
+    def __init__(self, n_inputs, gamma_weights, tau_decay, lambda_ridge, eta, cumulative_channels=[], reference_tracking_costs=[], affine=False, spiking=False):
         self.n_inputs = n_inputs
         self.n_outputs = n_inputs
         self.gamma_weights = gamma_weights
@@ -10,6 +10,10 @@ class Predictor:
         self.eta = eta
         self.affine = affine
         self.spiking = spiking
+        self.cumulative_channels = cumulative_channels 
+        self.reference_tracking_costs = reference_tracking_costs
+
+        self.Q = np.diag(self.reference_tracking_costs) # Diagonal cost matrix for reference tracking
 
         self.z = np.zeros(self.n_inputs) # Trace vector
         
@@ -26,16 +30,16 @@ class Predictor:
         self.Sigma = self.lambda_ridge * np.eye(self.n_inputs)
         self.Psi = np.zeros((self.n_outputs, self.n_inputs))
         # self.W = np.zeros((self.n_outputs, self.n_inputs)) # Prediction weights
-        self.W = 0.2*np.random.rand(self.n_outputs, self.n_inputs) # Random initial prediction weights
+        self.W = 0.5*np.random.rand(self.n_outputs, self.n_inputs) # Random initial prediction weights
         # self.W[0, 0] = -0.1
         # self.W[0, 2] = 0.1
         # self.spike_threshold = 0.9 # Initial spike threshold
-        self.spike_threshold = np.random.rand() # Random initial spike threshold
+        self.spike_threshold = self.W[0, -1] # Initial spike threshold set to bias weight
 
         self.t_prev = 0.0 # Time of previous event
 
 
-    def gradient_update(self, t:float, x_in:np.ndarray):
+    def gradient_update(self, t:float, x_in:np.ndarray, reference:np.ndarray=None):
         """
         Perform a gradient update of the prediction weights based on incoming spikes. 
         Then does a prediction. 
@@ -44,42 +48,57 @@ class Predictor:
         Assumes that x_in != 0. I.e. that this function is only called at events. 
         """
         # 1) Decay traces:
-        dt = t - self.t_prev
+        dt = t - self.t_prev # Time since previous event
         decay = np.exp(-dt/self.tau_decay)
         self.z *= decay
-
         if self.spiking:
             if self.z[-1] <= self.spike_threshold + 1e-9:
-                # print(self.z[-1], self.spike_threshold, t)
-                self.z[-1] = self.spike_threshold 
+                # Bias trace counts down to spike threshold and resets to 1. 
                 x_in = np.hstack((np.array([1.0]), x_in)) # Add feedback from previous output spike
             else:
                 x_in = np.hstack((np.array([0.0]), x_in)) # Add feedback from previous output spike
-
+        # self.z += np.random.normal(0, 0.02, size=self.z.shape) # Add small noise 
         # 3) Update traces with incoming spikes
         z_pre = self.z.copy() 
         z_post = z_pre.copy() #+ x_in #* (1-self.decay)/self.dt
-
         z_post[:len(x_in)] += x_in
         if self.affine:
             z_post[-1] = 1.0 # Bias input is always active
 
 
-        pred = self.W @ z_post
+        pred = self.W @ z_post # Prediction for current event (before weight update)
         if self.spiking:
             # Predict when to spike next:
             self.spike_threshold = pred[0] # Update spike threshold prediction
         # 4) Update covariance estimates and prediction weights when there is an input spike
         # Per-channel next-spike prediction:
         D_bar_x = np.diag((1-x_in))
+        # D_bar_x[0, 0] = 1.0 #
+        for idx in self.cumulative_channels:
+            if self.spiking:
+                D_bar_x[idx+1, idx+1] = 1 # Always accumulate
+            else:
+                D_bar_x[idx, idx] = 1 # Always accumulate
+        # print("D_bar_x:", D_bar_x)
         # grad_W = self.W @ np.outer(z_post, z_post) - np.outer(x_in, z_pre) - D_bar_x @ self.W @ np.outer(z_post, z_pre) + self.lambda_ridge * self.W
         grad_W_prev = self.W @ np.outer(z_post, z_post) + self.lambda_ridge * self.W
         grad_W_current = - np.outer(x_in, z_pre) - D_bar_x @ self.W @ np.outer(z_post, z_pre)
+
         
+        # reference = np.zeros(self.n_outputs)
+        # reference[0] = 0.
+
+        # # print(self.W.shape, z_post.shape, Q.shape, reference.shape)
+        
+        # print("grad_W_prev:", grad_W_prev)
         # self.W -= self.eta * grad_W
         self.W -= self.eta * grad_W_prev
         self.W -= self.eta * grad_W_current
         
+        if reference is not None:
+            e = (self.W @ z_post) - reference  # reference must be (n_outputs,)
+            grad_W_reference_tracking = np.outer(self.Q @ e, z_post)  # (n_outputs, n_inputs)   
+            self.W -= self.eta * grad_W_reference_tracking     
         
         
 

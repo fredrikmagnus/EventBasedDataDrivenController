@@ -87,7 +87,7 @@ print("Sigma:", predictor.Sigma)
 
 print(x.shape, predictions.shape)
 Plots.compare_time_predictions(time_arr, x, predictions, predictor.tau_decay)
-# Plots.compare_predictions(time_arr, x, predictions)
+Plots.compare_predictions(time_arr, x, predictions)
 # Plots.plot_traces(time, traces)
 # Plots.plot_covariances(time, Covs, CrossCovs)
 Plots.plot_gains(time_arr, PredictionGains)

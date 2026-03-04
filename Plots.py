@@ -295,7 +295,7 @@ def plot_gains_event_based(event_times, prediction_gains, title=None, figsize=(1
         )
 
     if title is None:
-        title = r'Gain Matrix $\text{Cov}(x_k, z_k^-)\text{Cov}(z_k^+, z_k^+)^{-1}$ Elements Over Event Times'
+        title = r'Predictor weights W'
 
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=figsize)
@@ -348,7 +348,7 @@ def plot_raw_predictions_event_based(event_times, predictions, title='Raw Predic
         fig = ax.figure
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    for i in range(predictions.shape[0]):
+    for i in reversed(range(predictions.shape[0])):
         ax.plot(
             event_times,
             predictions[i, :],
@@ -366,6 +366,128 @@ def plot_raw_predictions_event_based(event_times, predictions, title='Raw Predic
     if show:
         plt.show()
     return fig, ax
+
+
+def plot_prediction_error_event_based(
+    event_times,
+    x_event_times,
+    predictions,
+    tau,
+    title='Prediction Error',
+    figsize=(12, 6),
+    ax=None,
+    show=True,
+    channel_labels=None,
+    ylabel='Error',
+):
+    r"""Plot prediction error over event times using one-step-ahead (previous event) predictions.
+
+    The model predictions are interpreted as
+        \hat{a}_i(t_{k-1}) \approx \exp(-(t^{(i)}_{\text{next}} - t_{k-1})/\tau)
+    so when a channel i actually spikes at time t_k, the corresponding "true" value
+    for evaluating the previous-step prediction is
+        a_i(t_k) = \exp(-(t_k - t_{k-1})/\tau).
+
+    Error definition:
+        e_{i,k} = a_i(t_k) - \hat{a}_i(t_{k-1})   (only defined when channel i spikes at t_k)
+
+    Parameters:
+    - event_times: 1D array-like of global event times t_k (length N)
+    - x_event_times: list/sequence of length n_inputs, each element is an array-like of true spike times for that channel
+    - predictions: 2D array of shape (n_outputs, N) holding model predictions at each t_k
+        The first n_inputs rows are used.
+    - tau: time constant used in the exp(-dt/tau) target
+    - title: plot title
+    - figsize: figure size used when ax is None
+    - ax: optional matplotlib Axes. If provided, all channels are drawn in the same Axes.
+          If None, creates one subplot per channel.
+    - show: whether to call plt.show()
+    - channel_labels: optional list of labels (length n_inputs)
+    - ylabel: y-axis label
+
+    Returns:
+    - fig, axs, errors, true_values
+        errors has shape (n_inputs, N-1) and corresponds to event_times[1:]
+        true_values has the same shape, with NaN where a channel did not spike at that event.
+    """
+    event_times = np.asarray(event_times)
+    predictions = np.asarray(predictions)
+    n_inputs = len(x_event_times)
+
+    if event_times.ndim != 1:
+        raise ValueError(f"event_times must be 1D, got shape {event_times.shape}")
+    if predictions.ndim != 2:
+        raise ValueError(f"predictions must be 2D, got shape {predictions.shape}")
+    if predictions.shape[1] != event_times.shape[0]:
+        raise ValueError(
+            f"predictions second dimension must match len(event_times)={event_times.shape[0]}, got {predictions.shape[1]}"
+        )
+    if predictions.shape[0] < n_inputs:
+        raise ValueError(
+            f"predictions must have at least {n_inputs} rows to match len(x_event_times), got {predictions.shape[0]}"
+        )
+    if event_times.shape[0] < 2:
+        raise ValueError("Need at least 2 event times to compute one-step prediction error")
+    if tau <= 0:
+        raise ValueError(f"tau must be > 0, got {tau}")
+
+    # Build event indicator matrix x(t_k) for each channel i at each global event time t_k.
+    x_matrix = np.zeros((n_inputs, event_times.shape[0]), dtype=float)
+    for i in range(n_inputs):
+        channel_times = np.asarray(x_event_times[i])
+        if channel_times.size == 0:
+            continue
+        x_matrix[i, np.isin(event_times, channel_times)] = 1.0
+
+    # One-step-ahead comparison: compare prediction made at t_{k-1} to the truth at t_k.
+    # Truth is only defined for channels that actually spike at t_k.
+    pred_prev = predictions[:n_inputs, :-1]  # \hat{a}(t_{k-1}) aligned with k=1..N-1
+    dt = np.diff(event_times)  # dt[k-1] = t_k - t_{k-1}
+    a_true_scalar = np.exp(-dt / tau)  # length N-1
+
+    spiked_at_k = x_matrix[:, 1:].astype(bool)  # shape (n_inputs, N-1)
+    true_values = np.full((n_inputs, event_times.shape[0] - 1), np.nan, dtype=float)
+    true_values[spiked_at_k] = np.broadcast_to(a_true_scalar, true_values.shape)[spiked_at_k]
+    errors = true_values - pred_prev
+    t_err = event_times[1:]
+
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    if channel_labels is None:
+        channel_labels = [f'x{i+1}' for i in range(n_inputs)]
+    if len(channel_labels) != n_inputs:
+        raise ValueError(f"channel_labels must have length {n_inputs}, got {len(channel_labels)}")
+
+    if ax is None:
+        fig, axs = plt.subplots(n_inputs, 1, figsize=(figsize[0], max(figsize[1], 2 * n_inputs)), sharex=True)
+        if n_inputs == 1:
+            axs = np.array([axs])
+        for i in range(n_inputs):
+            mask = ~np.isnan(errors[i, :])
+            axs[i].scatter(t_err[mask], errors[i, mask], s=18, color=colors[i % len(colors)], label=channel_labels[i])
+            axs[i].axhline(0.0, color='k', linewidth=1, alpha=0.25)
+            axs[i].set_ylabel(ylabel)
+            axs[i].grid(True, alpha=0.3)
+            axs[i].legend(loc='upper right')
+        axs[-1].set_xlabel('Time')
+        fig.suptitle(title)
+        fig.tight_layout()
+    else:
+        fig = ax.figure
+        axs = ax
+        for i in range(n_inputs):
+            mask = ~np.isnan(errors[i, :])
+            ax.scatter(t_err[mask], errors[i, mask], s=18, color=colors[i % len(colors)], label=channel_labels[i])
+        ax.axhline(0.0, color='k', linewidth=1, alpha=0.25)
+        ax.set_xlabel('Time')
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+    if show:
+        plt.show()
+    return fig, axs, errors, true_values
 
 def compare_with_reference2(time, x, ref):
     """
