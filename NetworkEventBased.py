@@ -54,10 +54,11 @@ def create_network(adjacency, neuron_params, external_input=None):
 parameters = {
     'gamma_weights': 0.99,   # Decay factor for covariance estimates
     'tau_decay': 0.1,      # Time constant for trace decay
-    'lambda_ridge': 1e-3,   # Ridge regularization parameter
+    'lambda_ridge': 1e-4,   # Ridge regularization parameter
     'eta': 0.1,            # Learning rate for gradient update
     'affine': True,   # Include affine term in predictor
-    'spiking': True
+    'spiking': True,
+    'sigmoid_enable': True
 }
 
 adjacency = fully_connected_adjacency(4)
@@ -71,10 +72,11 @@ spike_times = [[] for _ in range(adjacency.shape[0])] # Spike times for each neu
 predictions = [[] for _ in range(adjacency.shape[0])] # Predictions for each neuron
 time_to_spike = lambda neuron: np.inf if neuron.spike_threshold <= 0 else - neuron.tau_decay * np.log(neuron.spike_threshold)
 
-T = 10 # Simulation time
+T = 100 # Simulation time
 n_steps = 1000
 n = 0
 next_spike_times = [time_to_spike(neuron) for neuron in network]
+print("Initial next spike times:", next_spike_times)
 t = 0
 while t < T and n < n_steps:
     n += 1

@@ -368,11 +368,78 @@ def plot_raw_predictions_event_based(event_times, predictions, title='Raw Predic
     return fig, ax
 
 
+def discounted_future_counts(times_list, tau):
+    """
+    times_list: list of 1D array-likes, one per channel, each nondecreasing.
+                Example: [t_ch0, t_ch1, ...]
+    tau: positive decay constant
+
+    Returns:
+      y: shape (C, N) where C=len(times_list),
+         N = total number of events across all channels.
+         Let T be the sorted list of all event times (global event times).
+         Then y[c, i] = sum_{t in channel c, t > T[i]} exp(-(t - T[i])/tau)
+
+      global_times: length N sorted array of merged times T
+      global_chan:  length N array of channel indices for each global event
+    """
+    if tau <= 0:
+        raise ValueError("tau must be positive.")
+
+    C = len(times_list)
+
+    # Build merged arrays
+    all_times = []
+    all_chans = []
+    for c, t in enumerate(times_list):
+        t = np.asarray(t, dtype=float)
+        if t.size:
+            if np.any(np.diff(t) < 0):
+                raise ValueError(f"times_list[{c}] must be nondecreasing.")
+            all_times.append(t)
+            all_chans.append(np.full(t.size, c, dtype=int))
+
+    if not all_times:
+        y = np.empty((C, 0), dtype=float)
+        return y, np.array([]), np.array([], dtype=int)
+
+    global_times = np.concatenate(all_times)
+    global_chan  = np.concatenate(all_chans)
+
+    # Sort by time (stable/deterministic tie-break by channel)
+    order = np.lexsort((global_chan, global_times))
+    global_times = global_times[order]
+    global_chan  = global_chan[order]
+    N = global_times.size
+
+    # Unique time blocks to handle ties correctly (strictly future: t > T[i])
+    uniq_times, inv = np.unique(global_times, return_inverse=True)
+    M = uniq_times.size  # number of unique time points
+
+    # counts[c, k] = number of events of channel c at exact time uniq_times[k]
+    counts = np.zeros((C, M), dtype=float)
+    np.add.at(counts, (global_chan, inv), 1.0)
+
+    # Backward recursion over unique times:
+    # S[:, k] = sum_{events at times > uniq_times[k]} exp(-(t - uniq_times[k])/tau)
+    S = np.zeros((C, M), dtype=float)
+    for k in range(M - 2, -1, -1):
+        dt = uniq_times[k + 1] - uniq_times[k]
+        a = np.exp(-dt / tau)
+        S[:, k] = a * (counts[:, k + 1] + S[:, k + 1])
+
+    # Evaluate at every global event time: all indices with same time share same S[:, k]
+    y = S[:, inv]  # shape (C, N)
+
+    return y
+
+
 def plot_prediction_error_event_based(
     event_times,
     x_event_times,
     predictions,
     tau,
+    cumulative_channels=[],
     title='Prediction Error',
     figsize=(12, 6),
     ax=None,
@@ -397,6 +464,7 @@ def plot_prediction_error_event_based(
     - predictions: 2D array of shape (n_outputs, N) holding model predictions at each t_k
         The first n_inputs rows are used.
     - tau: time constant used in the exp(-dt/tau) target
+    - cumulative_channels: list of channel indices for which predictions are cumulative (i.e. precition at time t_k0 should be compared to sum of exp(-(t_k - t_{k0})/tau) for all k such that t_k > t_k0 and channel i spikes at t_k)
     - title: plot title
     - figsize: figure size used when ax is None
     - ax: optional matplotlib Axes. If provided, all channels are drawn in the same Axes.
@@ -451,6 +519,12 @@ def plot_prediction_error_event_based(
     errors = true_values - pred_prev
     t_err = event_times[1:]
 
+    # True cumulative values for all channels
+    x_cumulative = discounted_future_counts(x_event_times, tau)
+    x_cumulative = np.array(x_cumulative)  # shape (len(cumulative_channels), N)
+    x_cumulative = x_cumulative[:, :-1]
+    errors_cumulative = x_cumulative - pred_prev  
+
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     if channel_labels is None:
         channel_labels = [f'x{i+1}' for i in range(n_inputs)]
@@ -463,7 +537,10 @@ def plot_prediction_error_event_based(
             axs = np.array([axs])
         for i in range(n_inputs):
             mask = ~np.isnan(errors[i, :])
-            axs[i].scatter(t_err[mask], errors[i, mask], s=18, color=colors[i % len(colors)], label=channel_labels[i])
+            if i in cumulative_channels:
+                axs[i].scatter(t_err[mask], errors_cumulative[i, mask], s=18, color=colors[i % len(colors)], label=f'{channel_labels[i]} (cumulative)')
+            else:
+                axs[i].scatter(t_err[mask], errors[i, mask], s=18, color=colors[i % len(colors)], label=channel_labels[i])
             axs[i].axhline(0.0, color='k', linewidth=1, alpha=0.25)
             axs[i].set_ylabel(ylabel)
             axs[i].grid(True, alpha=0.3)

@@ -9,9 +9,9 @@ from Plots import compare_event_time_predictions, plot_gains_event_based, plot_r
 importlib.reload(sys.modules['PredictorEventBased'])
 from PredictorEventBased import Predictor, spike_signal
 
-T = 100
-periods = [0.5, 0.5] # Spike periods for each input channel
-phases = [0.0, 0.2] # Phase offsets for each input channel
+T = 1000
+periods = [0.5] # Spike periods for each input channel
+phases = [0.0] # Phase offsets for each input channel
 n_inputs = len(periods)
 
 # Generate event-times for each input channel
@@ -48,16 +48,14 @@ print("Total number of events:", N)
 
 predictor = Predictor(
     n_inputs=n_inputs,   # Number of input channels
-    tau_decay=1.,      # Time constant for trace decay
+    tau_decay=0.5,      # Time constant for trace decay
     lambda_ridge=1e-6,   # Ridge regularization parameter
-    eta=1.5,            # Learning rate for gradient update
-    eta_cumulative=0.2,
-    cumulative_channels=[0], # Always accumulate covariance for first input channel
-    reference_tracking_costs=[0., 0.], # Cost for tracking reference in each output channel (0 means no reference tracking)
-    activation_enable=True,
+    eta=.3,            # Learning rate for gradient update
+    cumulative_channels=[], # Always accumulate covariance for first input channel
+    reference_tracking_costs=[0.], # Cost for tracking reference in each output channel (0 means no reference tracking)
+    sigmoid_enable=False,
     affine=True,   # Include affine term in predictor
-    spiking=False,
-    noise_std=0., # Standard deviation of noise added to trace at each event
+    spiking=False
 )
 
 n_outputs = predictor.n_outputs
@@ -69,6 +67,8 @@ if predictor.spiking:
 # Logs:
 predictions = []
 traces = []
+Covs = []
+CrossCovs = []
 PredictionGains = []
 
 if predictor.spiking and predictor.spike_threshold > 0:
@@ -89,14 +89,11 @@ for k, t in enumerate(all_spike_times):
         # print("Input vector:", x_in)
     PredictionGains.append(predictor.W.copy())
     reference = np.zeros(predictor.n_outputs) # No reference tracking in this example
-    predictor.update_state(t, x_in)
-    pred = predictor.predict()
-    # predictor.gradient_update(t, x_in, reference=reference)
-    predictor.gradient_update(reference=reference)
+    pred, spike_out = predictor.gradient_update(t, x_in, reference=reference)
     predictions.append(pred)
     traces.append(predictor.z_post[:n_inputs])
-    # if predictor.spiking and spike_out > 0:
-    #     x[0].append(t) # Store output spike for feedback in next event
+    if predictor.spiking and spike_out > 0:
+        x[0].append(t) # Store output spike for feedback in next event
 
     if predictor.spiking and predictor.spike_threshold > 0:
         next_spike_time = t + - predictor.tau_decay * np.log(predictor.spike_threshold)
@@ -129,10 +126,10 @@ compare_event_time_predictions(
     tau=predictor.tau_decay,
 )
 
-# plot_gains_event_based(
-#     event_times=all_spike_times,
-#     prediction_gains=PredictionGains,
-# )
+plot_gains_event_based(
+    event_times=all_spike_times,
+    prediction_gains=PredictionGains,
+)
 
 # Plot raw predictions:
 plot_raw_predictions_event_based(
@@ -146,7 +143,6 @@ plot_prediction_error_event_based(
     x_event_times=x,
     predictions=predictions,
     tau=predictor.tau_decay,
-    cumulative_channels=predictor.cumulative_channels,
 )
 
 

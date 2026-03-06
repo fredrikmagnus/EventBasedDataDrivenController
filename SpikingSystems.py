@@ -5,38 +5,55 @@ from scipy.linalg import expm
 
 class SpringMassDamper:
     def __init__(self, dt, mass, damping, stiffness, x0=[0.0, 0.0]):
+        self.dt = float(dt)
         self.mass = mass
         self.damping = damping
         self.stiffness = stiffness
 
-        # 1. continuous-time matrices
-        A_c = np.array([
+        # continuous-time matrices
+        self.A_c = np.array([
             [0, 1],
             [-self.stiffness/self.mass, -self.damping/self.mass]
         ])
-        B_c = np.array([
+        self.B_c = np.array([
             [0],
             [1/self.mass]
         ])
-        C   = np.array([[1, 0]])
-
-        # 2. exact discretisation  (using matrix exponential)
-        M = np.block([
-            [A_c, B_c],
-            [np.zeros((1,3))]
-        ])      # augment for integral
-        M_d = expm(M*dt)                       # expm([[A, B],[0,0]])
-        self.A = M_d[:2, :2]                   # e^{A_c dt}
-        self.B = M_d[:2,  2:3]                 # ∫_0^{dt} e^{A τ} B dτ
-        self.C = C
+        self.C = np.array([[1, 0]])  # output is displacement
 
         self.state = np.array(x0, dtype=float)               # initial state
         self.y = self.C @ self.state
 
-    def step(self, u):
-        self.state = self.A @ self.state + self.B.flatten() * u
+    def _dynamics(self, state, u):
+        """Continuous-time dynamics: x_dot = A_c x + B_c u."""
+        u = float(u)
+        return (self.A_c @ state) + (self.B_c.flatten() * u)
+
+    def step(self, u, dt=None):
+        """Advance one step using RK4.
+
+        Parameters
+        ----------
+        u : float
+            Input force applied over the interval.
+        dt : float | None
+            Timestep. If None, uses the default `dt` from construction.
+        """
+        if dt is None:
+            dt = self.dt
+        dt = float(dt)
+        if dt <= 0:
+            raise ValueError("dt must be positive")
+
+        x = self.state
+        k1 = self._dynamics(x, u)
+        k2 = self._dynamics(x + 0.5 * dt * k1, u)
+        k3 = self._dynamics(x + 0.5 * dt * k2, u)
+        k4 = self._dynamics(x + dt * k3, u)
+        self.state = x + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
         self.y = self.C @ self.state
-        return self.y[0]
+        return float(self.y[0])
     
 
 class DC_motor:
@@ -111,6 +128,16 @@ class DC_motor:
         self.x = self.A @ self.x + self.B @ u + np.random.normal(0, process_noise_STD, (2,1))
         self.y = self.C @ self.x + np.random.normal(0, measurement_noise_STD, (1,1))
         return self.y
+    
+class spike_decoder:
+    def __init__(self, tau_decay, n_inputs):
+        # Keeps an exponentially decaying trace of incoming spikes and returns it over time.
+        self.tau_decay = tau_decay
+        self.z = np.zeros(n_inputs)
+    def step(self, x_in, dt):
+        self.z *= np.exp(-dt/self.tau_decay)
+        self.z += x_in
+        return self.z.copy()
 
 
 class IFSpikeEncoder_absolute:
@@ -174,6 +201,8 @@ class EncoderArray:
             spike = encoder.step(input_value)
             spikes.append(spike)
         return np.concatenate(spikes)
+    
+
     
     
 def plot_system_response(time, y, spikes, IF_integral=None):
