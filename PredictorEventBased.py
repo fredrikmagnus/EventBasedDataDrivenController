@@ -7,7 +7,8 @@ def softplus(x):
     return np.log(1 + np.exp(x))
 
 class Predictor:
-    def __init__(self, n_inputs, tau_decay, lambda_ridge, eta, eta_cumulative=None, activation_enable=True, cumulative_channels=[], reference_tracking_costs=[], affine=False, spiking=False, noise_std=0.0):
+    def __init__(self, n_inputs, tau_decay, lambda_ridge, eta, eta_cumulative=None, activation_enable=True, cumulative_channels=[], reference_tracking_costs=[], affine=False, spiking=False, noise_std=0.0, seed=42):
+        np.random.seed(seed)
         self.n_inputs = n_inputs
         self.n_outputs = n_inputs
         self.tau_decay = tau_decay
@@ -42,6 +43,8 @@ class Predictor:
         self.Q = np.diag(self.reference_tracking_costs) # Diagonal cost matrix for reference tracking
         self.R = np.eye(self.n_outputs) # Diagonal cost matrix for prediction
 
+        # self.R[0,0] = 1
+        # self.R[-1, -1] = 100
 
         # self.phi = np.zeros(self.n_outputs) # Storing sigmoid(W @ z)*(1-sigmoid(W @ z)) 
         self.activation_derivative = np.ones(self.n_outputs) # Storing sigmoid(W @ z)*(1-sigmoid(W @ z)) for sigmoid case, and 1 for linear case
@@ -83,6 +86,8 @@ class Predictor:
             non_cumulative = sigmoid(lin) * (1 - self.cumulative_channels_mask)
             # Softplus for cumulative channels:
             cumulative = softplus(lin) * self.cumulative_channels_mask
+            # ReLU for cumulative channels:
+            # cumulative = np.maximum(0, lin) * self.cumulative_channels_mask
             return non_cumulative + cumulative
         else:
             return lin
@@ -94,9 +99,21 @@ class Predictor:
             non_cumulative = ( sigmoid(lin) * (1 - sigmoid(lin)) ) * (1 - self.cumulative_channels_mask)
             # Softplus derivative for cumulative channels:
             cumulative = sigmoid(lin) * self.cumulative_channels_mask # Derivative of softplus is sigmoid
+            # ReLU derivative for cumulative channels:
+            # cumulative = (lin > 0) * self.cumulative_channels_mask # Derivative of ReLU is 1 for positive values, 0 otherwise
             self.activation_derivative = non_cumulative + cumulative
         else:
             self.activation_derivative = np.ones(self.n_outputs)
+
+    def time_to_spike(self, feedback_channel_idx=0):
+        """
+        Return time until next spike based on current state and weights. 
+        Only relevant if spiking=True. 
+        Must be called after update_state() at each event.
+        """
+        pred = self.predict()
+        return - self.tau_decay * np.log(pred[feedback_channel_idx])
+
 
     def gradient_update(self, reference:np.ndarray=None):
         D_bar_x = np.diag((1-self.x_in))
@@ -116,7 +133,7 @@ class Predictor:
             grad_W_reference_tracking = np.outer(e * self.activation_derivative, self.z_post)  # (n_outputs, n_inputs)
             grad += grad_W_reference_tracking
 
-        # 
+        # Update weights
         eta = self.eta_cumulative * self.cumulative_channels_mask + self.eta * (1 - self.cumulative_channels_mask)
         self.W -= eta[:, np.newaxis] * grad
             
