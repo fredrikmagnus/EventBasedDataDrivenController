@@ -104,7 +104,7 @@ def compare_time_predictions(time, x, predictions, tau):
     plt.show()
 
 
-def compare_event_time_predictions(event_times, x_event_times, predictions, tau, title='True and Predicted Next Spike Times', figsize=(12, 6), ax=None, show=True):
+def compare_event_time_predictions(x_event_times, predictions, tau, title='True and Predicted Next Spike Times', figsize=(12, 6), ax=None, show=True):
     """Compare true spike event-times with predicted next spike times (event-based).
 
     Parameters:
@@ -120,7 +120,8 @@ def compare_event_time_predictions(event_times, x_event_times, predictions, tau,
     Returns:
     - fig, ax, next_spike_times_pred
     """
-    event_times = np.asarray(event_times)
+    # event_times = np.asarray(event_times)
+    event_times = np.unique(np.concatenate(x_event_times))
     predictions = np.asarray(predictions)
     n_inputs = len(x_event_times)
     if predictions.ndim != 2:
@@ -374,14 +375,11 @@ def discounted_future_counts(times_list, tau):
                 Example: [t_ch0, t_ch1, ...]
     tau: positive decay constant
 
-    Returns:
-      y: shape (C, N) where C=len(times_list),
-         N = total number of events across all channels.
-         Let T be the sorted list of all event times (global event times).
-         Then y[c, i] = sum_{t in channel c, t > T[i]} exp(-(t - T[i])/tau)
-
-      global_times: length N sorted array of merged times T
-      global_chan:  length N array of channel indices for each global event
+        Returns:
+            y: shape (C, N) where C=len(times_list),
+                 N = total number of events across all channels *including duplicates*.
+                 Let T be the sorted merged list of all event times (not uniqued).
+                 Then y[c, i] = sum_{t in channel c, t > T[i]} exp(-(t - T[i])/tau)
     """
     if tau <= 0:
         raise ValueError("tau must be positive.")
@@ -395,6 +393,8 @@ def discounted_future_counts(times_list, tau):
         t = np.asarray(t, dtype=float)
         if t.size:
             if np.any(np.diff(t) < 0):
+                print(t)
+                print(np.diff(t))
                 raise ValueError(f"times_list[{c}] must be nondecreasing.")
             all_times.append(t)
             all_chans.append(np.full(t.size, c, dtype=int))
@@ -431,6 +431,68 @@ def discounted_future_counts(times_list, tau):
     # Evaluate at every global event time: all indices with same time share same S[:, k]
     y = S[:, inv]  # shape (C, N)
 
+    return y
+
+
+def discounted_future_counts_at_times(times_list, tau, query_times):
+    """Compute discounted future spike counts evaluated at arbitrary times.
+
+    For each channel c and query time t, returns
+        y[c, i] = sum_{s in times_list[c], s > t} exp(-(s - t)/tau)
+    i.e. strictly future spikes only.
+    """
+    if tau <= 0:
+        raise ValueError("tau must be positive.")
+
+    query_times = np.asarray(query_times, dtype=float)
+    if query_times.ndim != 1:
+        raise ValueError(f"query_times must be 1D, got shape {query_times.shape}")
+
+    C = len(times_list)
+
+    # Build merged arrays
+    all_times = []
+    all_chans = []
+    for c, t in enumerate(times_list):
+        t = np.asarray(t, dtype=float)
+        if t.size:
+            if np.any(np.diff(t) < 0):
+                raise ValueError(f"times_list[{c}] must be nondecreasing.")
+            all_times.append(t)
+            all_chans.append(np.full(t.size, c, dtype=int))
+
+    if not all_times:
+        return np.zeros((C, query_times.size), dtype=float)
+
+    global_times = np.concatenate(all_times)
+    global_chan = np.concatenate(all_chans)
+
+    # Sort by time (stable/deterministic tie-break by channel)
+    order = np.lexsort((global_chan, global_times))
+    global_times = global_times[order]
+    global_chan = global_chan[order]
+
+    uniq_times, inv = np.unique(global_times, return_inverse=True)
+    M = uniq_times.size
+
+    counts = np.zeros((C, M), dtype=float)
+    np.add.at(counts, (global_chan, inv), 1.0)
+
+    # Backward recursion over unique times:
+    S = np.zeros((C, M), dtype=float)
+    for k in range(M - 2, -1, -1):
+        dt = uniq_times[k + 1] - uniq_times[k]
+        a = np.exp(-dt / tau)
+        S[:, k] = a * (counts[:, k + 1] + S[:, k + 1])
+
+    # Evaluate at query times: use next event time strictly greater than t.
+    idx_next = np.searchsorted(uniq_times, query_times, side='right')
+    y = np.zeros((C, query_times.size), dtype=float)
+    valid = idx_next < M
+    if np.any(valid):
+        dt_next = uniq_times[idx_next[valid]] - query_times[valid]
+        a = np.exp(-dt_next / tau)
+        y[:, valid] = a * (counts[:, idx_next[valid]] + S[:, idx_next[valid]])
     return y
 
 
@@ -519,11 +581,10 @@ def plot_prediction_error_event_based(
     errors = true_values - pred_prev
     t_err = event_times[1:]
 
-    # True cumulative values for all channels
-    x_cumulative = discounted_future_counts(x_event_times, tau)
-    x_cumulative = np.array(x_cumulative)  # shape (len(cumulative_channels), N)
-    x_cumulative = x_cumulative[:, :-1]
-    errors_cumulative = x_cumulative - pred_prev  
+    # True cumulative values for all channels, aligned with provided (unique) event_times
+    x_cumulative = discounted_future_counts_at_times(x_event_times, tau, event_times)
+    x_cumulative = np.asarray(x_cumulative, dtype=float)[:, :-1]
+    errors_cumulative = x_cumulative - pred_prev
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     if channel_labels is None:
